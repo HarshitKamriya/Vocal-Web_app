@@ -102,6 +102,8 @@ let confidenceThreshold = 0.5;
 // Speech recognition (voice input for target)
 let recognition = null;
 let isListeningForTarget = false;
+let waitingForInitialTarget = false; // Flag to track if we're waiting for initial target
+let detectionStarted = false; // Track if detection loop has started
 
 function getStatusLabel() {
   return document.getElementById("status-label");
@@ -136,10 +138,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
   initSpeechRecognition();
 
-  // Try to auto-start (may be blocked on some browsers until user gesture)
-  startApp().catch(() => {
-    getStatusLabel().textContent = "Tap 'Start Guidance' to allow camera.";
-  });
+  // Don't auto-start - wait for user to click "Start Guidance" button
+  // This ensures proper permissions and user intent
 });
 
 async function initCamera() {
@@ -278,10 +278,17 @@ async function startApp() {
   try {
     await initCamera();
     await loadYoloModel();
-    getStatusLabel().textContent = "Guidance running…";
-    startBtn.textContent = "Running";
+    
+    // Automatically prompt for target via voice
+    getStatusLabel().textContent = "Ready. Asking for target object…";
+    startBtn.textContent = "Waiting for target…";
     startBtn.disabled = true;
-    detectionLoop();
+    
+    // Wait a moment for camera to stabilize, then ask for target
+    setTimeout(() => {
+      askForTargetAutomatically();
+    }, 1000);
+    
   } catch (err) {
     console.error("Start app error:", err);
     const reason =
@@ -298,6 +305,61 @@ async function startApp() {
       startBtn.disabled = false;
     }
   }
+}
+
+// Automatically ask user for target object via voice
+function askForTargetAutomatically() {
+  if (!recognition) {
+    // If voice recognition not available, start detection without target
+    console.warn("Voice recognition not available, starting without target");
+    getStatusLabel().textContent = "Voice recognition not available. Starting detection for all objects.";
+    speak("Voice recognition not available. Starting detection for all objects. You can select a target from the dropdown.");
+    setTimeout(() => {
+      startDetection();
+    }, 2000);
+    return;
+  }
+  
+  waitingForInitialTarget = true;
+  
+  // Speak the prompt
+  const prompt = "What object would you like me to find? Say the name of an object, like person, chair, bottle, car, phone, laptop, or say any to detect all objects.";
+  speak(prompt);
+  
+  // Wait for speech to finish, then start listening
+  setTimeout(() => {
+    try {
+      getStatusLabel().textContent = "🎤 Listening for target object…";
+      recognition.start();
+    } catch (e) {
+      console.error("Failed to start recognition:", e);
+      // If recognition fails, start detection without target
+      waitingForInitialTarget = false;
+      getStatusLabel().textContent = "Voice recognition failed. Starting detection for all objects.";
+      speak("Voice recognition failed. Starting detection for all objects.");
+      setTimeout(() => {
+        startDetection();
+      }, 2000);
+    }
+  }, 3500); // Wait 3.5 seconds for speech to finish
+}
+
+// Start the detection loop
+function startDetection() {
+  if (detectionStarted) return;
+  detectionStarted = true;
+  
+  getStatusLabel().textContent = currentTarget 
+    ? `Guidance running. Looking for ${currentTarget}…`
+    : "Guidance running. Detecting all objects…";
+  
+  const startBtn = document.getElementById("start-btn");
+  if (startBtn) {
+    startBtn.textContent = "Running";
+    startBtn.disabled = true;
+  }
+  
+  detectionLoop();
 }
 
 let lastDetectionTime = 0;
@@ -698,6 +760,20 @@ function initSpeechRecognition() {
 
   recognition.onerror = (event) => {
     console.warn("Speech recognition error", event.error);
+    
+    // If we're waiting for initial target and get an error, start detection without target
+    if (waitingForInitialTarget) {
+      if (event.error === "no-speech" || event.error === "audio-capture") {
+        // User didn't speak or mic not available - start detection anyway
+        waitingForInitialTarget = false;
+        speak("Starting detection for all objects. You can set a target later using the dropdown or voice button.");
+        setTimeout(() => {
+          startDetection();
+        }, 2000);
+        return;
+      }
+    }
+    
     getStatusLabel().textContent =
       "Voice error: " + (event.error || "unknown error");
   };
@@ -705,7 +781,7 @@ function initSpeechRecognition() {
   recognition.onresult = (event) => {
     if (!event.results || !event.results[0]) return;
     const transcript = event.results[0][0].transcript.toLowerCase().trim();
-    handleTargetFromSpeech(transcript);
+    handleTargetFromSpeech(transcript, waitingForInitialTarget);
   };
 
   recognition.onend = () => {
@@ -714,6 +790,24 @@ function initSpeechRecognition() {
     if (btn) {
       btn.textContent = "🎤 Set Target by Voice";
       btn.disabled = false;
+    }
+    
+    // If we were waiting for initial target and didn't get a valid one, retry
+    if (waitingForInitialTarget && !currentTarget) {
+      setTimeout(() => {
+        if (waitingForInitialTarget && !currentTarget) {
+          speak("I didn't catch that. Please say an object name like person, chair, bottle, or any.");
+          setTimeout(() => {
+            try {
+              recognition.start();
+            } catch (e) {
+              console.error("Failed to restart recognition:", e);
+              waitingForInitialTarget = false;
+              startDetection();
+            }
+          }, 2000);
+        }
+      }, 2000);
     }
   };
 }
@@ -729,14 +823,16 @@ function toggleVoiceTargetListening() {
     recognition.stop();
   } else {
     try {
+      getStatusLabel().textContent = "🎤 Listening for target object…";
       recognition.start();
     } catch (e) {
       console.error("Failed to start recognition", e);
+      getStatusLabel().textContent = "Voice recognition error. Use the dropdown instead.";
     }
   }
 }
 
-function handleTargetFromSpeech(transcript) {
+function handleTargetFromSpeech(transcript, isInitialPrompt = false) {
   // Basic normalization and mapping to model class names
   const norm = transcript
     .replace(/[^a-zA-Z ]/g, " ")
@@ -927,17 +1023,32 @@ function handleTargetFromSpeech(transcript) {
   if (!matched) {
     getStatusLabel().textContent =
       'Did not recognize a target. Try saying "person", "chair", "bottle", "car", "phone", or "any".';
-    speak("I did not catch a valid target. Please try again.");
-    return;
+    
+    if (isInitialPrompt) {
+      // If this is the initial prompt, we'll retry automatically (handled in onend)
+      speak("I did not catch a valid target. Please try again.");
+      return;
+    } else {
+      speak("I did not catch a valid target. Please try again.");
+      return;
+    }
   }
 
   if (matched === "any") {
     currentTarget = "";
     const select = document.getElementById("target-select");
     if (select) select.value = "";
-    const msg = "Target cleared. Detecting any object.";
+    const msg = "Target set to any. Detecting all objects.";
     getStatusLabel().textContent = msg;
     speak(msg);
+    
+    // If this was the initial prompt, start detection now
+    if (isInitialPrompt) {
+      waitingForInitialTarget = false;
+      setTimeout(() => {
+        startDetection();
+      }, 1500);
+    }
     return;
   }
 
@@ -953,8 +1064,16 @@ function handleTargetFromSpeech(transcript) {
     }
   }
 
-  const msg = `Target set to ${matched}.`;
+  const msg = `Target set to ${matched}. Starting detection now.`;
   getStatusLabel().textContent = msg;
   speak(msg);
+  
+  // If this was the initial prompt, start detection now
+  if (isInitialPrompt) {
+    waitingForInitialTarget = false;
+    setTimeout(() => {
+      startDetection();
+    }, 2000); // Wait for confirmation speech to finish
+  }
 }
 
