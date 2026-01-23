@@ -323,7 +323,7 @@ function askForTargetAutomatically() {
   waitingForInitialTarget = true;
   
   // Speak the prompt
-  const prompt = "What object would you like me to find? Say the name of an object, like person, chair, bottle, car, phone, laptop, or say any to detect all objects.";
+  const prompt = "What object would you like me to find? Say the name of an object";
   speak(prompt);
   
   // Wait for speech to finish, then start listening
