@@ -99,11 +99,55 @@ let lastSpeakTime = 0;
 let currentTarget = "";
 let confidenceThreshold = 0.5;
 
+// -------- Monocular step estimation (heuristic) --------
+// Approximate real-world heights (meters) for some common classes.
+// Used with a simple pinhole model to estimate distance from bbox height.
+const CLASS_HEIGHT_M = {
+  person: 1.7,
+  chair: 0.9,
+  "dining table": 0.75,
+  couch: 0.9,
+  bed: 0.9,
+  car: 1.4,
+  bus: 3.0,
+  truck: 3.0,
+  bicycle: 1.1,
+  motorcycle: 1.2,
+  "cell phone": 0.15,
+  laptop: 0.02,
+  bottle: 0.25,
+  door: 2.0,
+  "stop sign": 2.1,
+};
+
+// Focal length in pixels (rough heuristic for typical phone rear camera).
+// You can later calibrate this per device for better absolute accuracy.
+const FOCAL_LENGTH_PX = 900;
+
+// Average user step / stride length in meters (can be user-calibrated later).
+const USER_STRIDE_M = 0.7;
+
+// Only trust distance when bbox is reasonably tall in the frame.
+const MIN_BOX_HEIGHT_PX = 20;
+// Scale factor for converting relative box height to approximate steps.
+const STEP_SCALE_FACTOR = 1.8;
+
+// Speak only when estimated steps change by at least this much.
+const STEP_CHANGE_THRESHOLD = 1;
+
+// If target is this close in steps (or closer), announce "target found" and stop.
+const TARGET_FOUND_MAX_STEPS = 2;
+
+// Track last estimated integer steps per class+side to decide if it's getting closer/farther.
+// key -> { steps: number, timestamp: number }
+let lastStepsMap = {};
+
 // Speech recognition (voice input for target)
 let recognition = null;
 let isListeningForTarget = false;
 let waitingForInitialTarget = false; // Flag to track if we're waiting for initial target
 let detectionStarted = false; // Track if detection loop has started
+let startAppInFlight = null; // prevents double-start when buttons are tapped quickly
 
 function getStatusLabel() {
   return document.getElementById("status-label");
@@ -161,6 +205,7 @@ async function initCamera() {
 
   let stream = null;
   try {
+    getStatusLabel().textContent = "Starting camera…";
     stream = await navigator.mediaDevices.getUserMedia(constraintsBase);
   } catch (err) {
     // Fallback to any camera
@@ -185,13 +230,46 @@ async function initCamera() {
     }
   }
 
+  // Extra safety for mobile: ensure correct attributes before attaching stream
+  if (videoEl) {
+    videoEl.setAttribute("playsinline", "true");
+    videoEl.muted = true;
+  }
+
   videoEl.srcObject = stream;
+
+   // Try to start playback immediately (some mobile browsers need this)
+  try {
+    const earlyPlay = videoEl.play();
+    if (earlyPlay && typeof earlyPlay.then === "function") {
+      earlyPlay.catch((err) => {
+        console.warn("Early video play() failed", err);
+      });
+    }
+  } catch (e) {
+    console.warn("Error calling video.play() early", e);
+  }
 
   return new Promise((resolve, reject) => {
     videoEl.onloadedmetadata = () => {
       canvasEl.width = videoEl.videoWidth;
       canvasEl.height = videoEl.videoHeight;
-      resolve();
+      // Explicitly start video playback (needed on some browsers)
+      const playPromise = videoEl.play();
+      if (playPromise && typeof playPromise.then === "function") {
+        playPromise
+          .then(() => resolve())
+          .catch((err) => {
+            console.warn("Video play() failed after metadata", err);
+            // Even if autoplay is blocked, resolve so the rest of the app can proceed,
+            // but update status label so the user knows to tap the video.
+            getStatusLabel().textContent =
+              "Camera stream is ready, but video is blocked. Tap the video to start preview.";
+            resolve();
+          });
+      } else {
+        resolve();
+      }
     };
     videoEl.onerror = (e) => reject(e);
   });
@@ -270,16 +348,37 @@ function loadScript(src) {
   });
 }
 
-async function startApp() {
-  if (isRunning) return;
-  isRunning = true;
+async function startApp(options = {}) {
+  // Prevent duplicate starts (common on mobile with double-taps)
+  if (startAppInFlight) return startAppInFlight;
+  if (isRunning && videoEl?.srcObject && yoloSession) return;
+
+  startAppInFlight = (async () => {
+    isRunning = true;
   const startBtn = document.getElementById("start-btn");
   
   try {
+    // Start camera first so the user immediately sees video,
+    // then load the model (which may take a few seconds the first time).
     await initCamera();
+
+    getStatusLabel().textContent =
+      "Camera ready. Loading detection model… This may take a few seconds.";
+
     await loadYoloModel();
     
-    // Automatically prompt for target via voice
+    // If we were launched via "Set Target by Voice", don't auto-prompt here.
+    if (options.skipAutoTargetPrompt) {
+      getStatusLabel().textContent =
+        "Ready. Tap “Set Target by Voice” and say the object name.";
+      if (startBtn) {
+        startBtn.textContent = "Ready";
+        startBtn.disabled = false;
+      }
+      return;
+    }
+
+    // Default flow: automatically prompt for target via voice
     getStatusLabel().textContent = "Ready. Asking for target object…";
     startBtn.textContent = "Waiting for target…";
     startBtn.disabled = true;
@@ -304,7 +403,13 @@ async function startApp() {
       startBtn.textContent = "Start Guidance";
       startBtn.disabled = false;
     }
+    throw err;
+  } finally {
+    startAppInFlight = null;
   }
+  })();
+
+  return startAppInFlight;
 }
 
 // Automatically ask user for target object via voice
@@ -370,7 +475,11 @@ async function detectionLoop(timestamp) {
 
   requestAnimationFrame(detectionLoop);
 
-  if (!timestamp) return;
+  // Ensure we have a valid timestamp even on the very first call
+  if (typeof timestamp !== "number") {
+    timestamp = performance.now();
+  }
+
   if (timestamp - lastDetectionTime < DETECTION_INTERVAL_MS) {
     return;
   }
@@ -608,6 +717,32 @@ function renderDetections(predictions) {
   });
 }
 
+// Estimate approximate steps to object using bbox height and simple pinhole geometry.
+function estimateSteps(pred) {
+  if (!pred || !pred.bbox) return null;
+  const [x, y, width, height] = pred.bbox;
+  if (height < MIN_BOX_HEIGHT_PX) return null;
+
+  // Use relative height in the frame as a robust proxy for distance.
+  const frameHeight = canvasEl && canvasEl.height ? canvasEl.height : videoEl?.videoHeight;
+  if (!frameHeight || frameHeight <= 0) return null;
+
+  const relativeHeight = height / frameHeight; // 0..1
+  if (relativeHeight <= 0) return null;
+
+  // Heuristic: more steps when box is small, fewer when big.
+  // baseSteps ~ 1 when object fills most of the frame, grows as it gets smaller.
+  const baseSteps = 1 / relativeHeight;
+  let steps = baseSteps * STEP_SCALE_FACTOR;
+
+  if (!isFinite(steps) || steps <= 0) return null;
+
+  // Keep steps in a reasonable range
+  steps = Math.max(1, Math.min(20, steps));
+
+  return steps;
+}
+
 function getSpatialDescriptor(pred) {
   const [x, y, width, height] = pred.bbox;
   const centerX = x + width / 2;
@@ -616,8 +751,9 @@ function getSpatialDescriptor(pred) {
 
   const normalizedCenterX = centerX / frameWidth;
   let horizontal;
-  if (normalizedCenterX < 0.33) horizontal = "left";
-  else if (normalizedCenterX > 0.66) horizontal = "right";
+  // Make left/right zones a bit wider so guidance is more decisive.
+  if (normalizedCenterX < 0.4) horizontal = "left";
+  else if (normalizedCenterX > 0.6) horizontal = "right";
   else horizontal = "center";
 
   const boxArea = width * height;
@@ -676,26 +812,115 @@ function handleVoiceGuidance(predictions) {
   const best = filtered.sort((a, b) => b.score - a.score)[0];
   const spatial = getSpatialDescriptor(best);
 
-  const key = `${best.class}-${spatial.horizontal}-${spatial.distance}`;
-  const last = lastSpoken[key];
+  // --- Step-based guidance logic ---
+  const estimatedSteps = estimateSteps(best);
 
-  if (last && now - last.timestamp < SPEAK_COOLDOWN_MS) {
+  // Fallback to old behavior if we cannot estimate steps reliably
+  if (estimatedSteps == null) {
+    const keyFallback = `${best.class}-${spatial.horizontal}-${spatial.distance}`;
+    const lastFallback = lastSpoken[keyFallback];
+    if (lastFallback && now - lastFallback.timestamp < SPEAK_COOLDOWN_MS) {
+      return;
+    }
+    const fallbackPhrase = currentTarget
+      ? buildTargetPhrase(best, spatial)
+      : buildPhrase(best, spatial);
+    speak(fallbackPhrase);
+    lastSpoken[keyFallback] = { timestamp: now };
+    lastSpeakTime = now;
+    getStatusLabel().textContent = fallbackPhrase;
     return;
   }
 
-  const phrase = currentTarget
-    ? buildTargetPhrase(best, spatial)
-    : buildPhrase(best, spatial);
+  const roundedSteps = Math.max(1, Math.round(estimatedSteps));
+
+  // If object is extremely close (1–2 steps), say "Target found" and stop guidance.
+  if (roundedSteps <= TARGET_FOUND_MAX_STEPS) {
+    const foundText = currentTarget
+      ? `Target ${best.class} found. It is within ${roundedSteps} step${
+          roundedSteps === 1 ? "" : "s"
+        }. Stopping guidance.`
+      : `Object ${best.class} found. It is within ${roundedSteps} step${
+          roundedSteps === 1 ? "" : "s"
+        }. Stopping guidance.`;
+
+    speak(foundText);
+    getStatusLabel().textContent = foundText;
+    if ("vibrate" in navigator) {
+      navigator.vibrate([100, 60, 100]);
+    }
+
+    // Stop detection loop
+    stopDetection();
+    lastSpeakTime = now;
+    return;
+  }
+
+  const sideText =
+    spatial.horizontal === "center"
+      ? "ahead"
+      : spatial.horizontal === "left"
+      ? "to your left"
+      : "to your right";
+
+  const mapKey = `${best.class}-${spatial.horizontal}`;
+  const lastInfo = lastStepsMap[mapKey];
+
+  // Only speak if step count actually changed by at least threshold
+  if (lastInfo && Math.abs(roundedSteps - lastInfo.steps) < STEP_CHANGE_THRESHOLD) {
+    return;
+  }
+
+  // Also respect per-object cooldown
+  const keyCooldown = `${mapKey}-${roundedSteps}`;
+  const lastSpokenEntry = lastSpoken[keyCooldown];
+  if (lastSpokenEntry && now - lastSpokenEntry.timestamp < SPEAK_COOLDOWN_MS) {
+    return;
+  }
+
+  let trendText = "";
+  if (lastInfo) {
+    if (roundedSteps < lastInfo.steps) trendText = "getting closer";
+    else if (roundedSteps > lastInfo.steps) trendText = "getting farther";
+  }
+
+  let phrase;
+  if (currentTarget) {
+    phrase = `Target ${best.class}, about ${roundedSteps} step${
+      roundedSteps === 1 ? "" : "s"
+    } ${sideText}${trendText ? `, ${trendText}` : ""}.`;
+  } else {
+    phrase = `${capitalize(best.class)}, about ${roundedSteps} step${
+      roundedSteps === 1 ? "" : "s"
+    } ${sideText}${trendText ? `, ${trendText}` : ""}.`;
+  }
 
   speak(phrase);
-  lastSpoken[key] = { timestamp: now };
   lastSpeakTime = now;
+  lastStepsMap[mapKey] = { steps: roundedSteps, timestamp: now };
+  lastSpoken[keyCooldown] = { timestamp: now };
 
   if (currentTarget && best.class === currentTarget && "vibrate" in navigator) {
     navigator.vibrate([80, 40, 80]);
   }
 
   getStatusLabel().textContent = phrase;
+}
+
+function stopDetection() {
+  isRunning = false;
+  detectionStarted = false;
+  const startBtn = document.getElementById("start-btn");
+  if (startBtn) {
+    startBtn.textContent = "Start Guidance";
+    startBtn.disabled = false;
+  }
+  // Stop camera stream if any
+  if (videoEl && videoEl.srcObject) {
+    const tracks = videoEl.srcObject.getTracks();
+    tracks.forEach((t) => t.stop && t.stop());
+    videoEl.srcObject = null;
+  }
 }
 
 function speak(text) {
@@ -812,7 +1037,7 @@ function initSpeechRecognition() {
   };
 }
 
-function toggleVoiceTargetListening() {
+async function toggleVoiceTargetListening() {
   if (!recognition) {
     getStatusLabel().textContent =
       "Voice target not available. Use the dropdown instead.";
@@ -823,6 +1048,20 @@ function toggleVoiceTargetListening() {
     recognition.stop();
   } else {
     try {
+      // If user taps "Set Target by Voice" first, bootstrap camera + model now.
+      if (!isRunning || !videoEl?.srcObject || !yoloSession) {
+        const btn = document.getElementById("voice-target-btn");
+        if (btn) {
+          btn.disabled = true;
+          btn.textContent = "Starting…";
+        }
+        await startApp({ skipAutoTargetPrompt: true });
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "🎤 Set Target by Voice";
+        }
+      }
+
       getStatusLabel().textContent = "🎤 Listening for target object…";
       recognition.start();
     } catch (e) {
@@ -1048,6 +1287,12 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false) {
       setTimeout(() => {
         startDetection();
       }, 1500);
+    } else if (!detectionStarted && isRunning) {
+      // If user used "Set Target by Voice" and guidance isn't running yet,
+      // start detection automatically after confirming the target.
+      setTimeout(() => {
+        startDetection();
+      }, 1500);
     }
     return;
   }
@@ -1074,6 +1319,12 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false) {
     setTimeout(() => {
       startDetection();
     }, 2000); // Wait for confirmation speech to finish
+  } else if (!detectionStarted && isRunning) {
+    // If user clicked "Set Target by Voice" after Start Guidance
+    // and detection hasn't begun yet, start it automatically.
+    setTimeout(() => {
+      startDetection();
+    }, 2000);
   }
 }
 
