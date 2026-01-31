@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>User Guide – Vocal Path</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+    <div class="guide-page" id="guide-container">
+        <h1 class="guide-title">User Guide</h1>
+
+        <div class="guide-text">
+            <p>Welcome to <strong>VocalPath</strong>.</p>
+
+            <p>
+                After opening the app, listen carefully to the instructions.
+            </p>
+
+            <p>
+                To start navigation, tap the <strong>bottom left button</strong> on your screen.
+            </p>
+
+            <p>
+                Your camera will open.
+                Slowly move your phone in all directions so the system can scan your surroundings.
+            </p>
+
+            <p>
+                Once scanning is complete, <strong>speak your destination clearly</strong>.
+            </p>
+
+            <p>
+                After the target is locked, follow the voice instructions to move
+                left, right, or forward.
+            </p>
+
+            <p>
+                When you hear <strong>navigation completed</strong>, you have reached your destination.
+            </p>
+
+            <p class="guide-highlight">
+                Double tap anywhere on the screen to return to the home screen.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        let lastTap = 0;
+
+        // Double tap to go home
+        document.getElementById('guide-container').addEventListener('click', () => {
+            const now = Date.now();
+            if (now - lastTap < 300) {
+                window.location.href = 'index.html';
+            }
+            lastTap = now;
+        });
+
+        // Voice guidance on load
+        window.addEventListener('DOMContentLoaded', () => {
+            if (!('speechSynthesis' in window)) return;
+
+            const text = `
+        Welcome to VocalPath.
+        After opening the app, listen carefully to the instructions.
+        To start navigation, tap the bottom left button on your screen.
+        Your camera will open.
+        Slowly move your phone in all directions so the system can scan your surroundings.
+        Once scanning is complete, speak your destination clearly.
+        After the target is locked, follow the voice instructions to move left, right, or forward.
+        When you hear navigation completed, you have reached your destination.
+        To return to the home screen, double tap anywhere on the screen.
+      `;
+
+            const speech = new SpeechSynthesisUtterance(text);
+            speech.rate = 0.9;
+            speech.volume = 1;
+            speechSynthesis.speak(speech);
+        });
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Destination Reached – Vocal Path</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+    <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+    <div class="arrived-page" id="arrived-container">
+        <div class="arrived-content">
+            <div class="arrived-icon">🎉</div>
+            <h1 class="arrived-title">Destination Reached</h1>
+
+            <p class="arrived-label">You walked for:</p>
+            <h2 class="arrived-duration" id="duration">0s</h2>
+
+            <p class="arrived-hint">
+                Double tap anywhere to return to Home
+            </p>
+        </div>
+    </div>
+
+    <script>
+        let lastTap = 0;
+
+        // Double tap to go home
+        document.getElementById('arrived-container').addEventListener('click', () => {
+            const now = Date.now();
+            if (now - lastTap < 300) {
+                window.location.href = 'index.html';
+            }
+            lastTap = now;
+        });
+
+        // Calculate duration
+        window.addEventListener('DOMContentLoaded', () => {
+            const startTime = localStorage.getItem('sessionStartTime');
+            const durationEl = document.getElementById('duration');
+
+            if (startTime) {
+                const endTime = Date.now();
+                const diffMs = endTime - Number(startTime);
+                const seconds = Math.floor(diffMs / 1000);
+                const minutes = Math.floor(seconds / 60);
+                const remainingSeconds = seconds % 60;
+
+                if (minutes > 0) {
+                    durationEl.textContent = `${minutes}m ${remainingSeconds}s`;
+                } else {
+                    durationEl.textContent = `${remainingSeconds}s`;
+                }
+            }
+
+            // Clear session
+            localStorage.removeItem('sessionStartTime');
+            localStorage.removeItem('sessionId');
+
+            // Speak arrival message
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(
+                    "Navigation ended. Double tap anywhere to go to home page."
+                );
+                utterance.rate = 0.95;
+                utterance.volume = 1;
+                window.speechSynthesis.speak(utterance);
+            }
+        });
+    </script>
+</body>
+
+</html>

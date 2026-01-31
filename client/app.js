@@ -463,7 +463,6 @@ function startDetection() {
     startBtn.textContent = "Running";
     startBtn.disabled = true;
   }
-  
   detectionLoop();
 }
 

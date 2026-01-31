@@ -1,160 +1,114 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
-  <title>Vocal Path – Object Guide</title>
+  <title>Vocal Path – AI Vision Assistant</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <meta name="description" content="Eyes-free indoor navigation for emergencies & accessibility" />
   <link rel="stylesheet" href="style.css" />
-
-  <!-- YOLO via ONNX Runtime Web -->
-  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js"></script>
-  <!-- COCO-SSD fallback (loaded dynamically if YOLO fails) -->
-  <!-- TensorFlow.js and COCO-SSD will be loaded dynamically if needed -->
 </head>
+
 <body>
-  <main>
-    <header>
-      <h1>Vocal Path</h1>
-      <p class="subtitle">Real-time object guidance for visual assistance</p>
-    </header>
+  <div class="vocalpath-home">
+    <!-- HERO SECTION -->
+    <section class="hero-section">
+      <div class="bg-icon top-right">📍</div>
+      <div class="bg-icon bottom-left">🌐</div>
 
-    <section id="video-section">
-      <!-- Video feed -->
-      <video id="video" playsinline autoplay muted></video>
+      <div class="hero-container">
+        <div class="hero-left">
+          <h1>
+            Find the right path.<br />
+            Using your voice.
+          </h1>
+          <p class="hero-sub">
+            Eyes-free indoor navigation for emergencies & accessibility
+          </p>
+        </div>
 
-      <!-- Overlay canvas for bounding boxes -->
-      <canvas id="overlay"></canvas>
-
-      <!-- Status overlay -->
-      <div id="status-label" aria-live="polite">
-        Loading camera and model…
+        <div class="hero-right">
+          <div class="phone">
+            <div class="phone-screen">
+              <div class="status-bar">9:41 📶 🔋</div>
+              <div class="map-view">
+                <div class="route vertical"></div>
+                <div class="route horizontal"></div>
+                <div class="marker">60</div>
+                <div class="map-card">
+                  <strong>Main Exit Corridor</strong>
+                  <span>120 m</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </section>
 
-    <section id="controls" aria-label="Controls">
-      <button id="start-btn">Start Guidance</button>
-      <button id="toggle-voice-btn" aria-pressed="true">Voice: On</button>
-      <button id="voice-target-btn">🎤 Set Target by Voice</button>
-
-      <div class="control-group">
-        <label for="confidence-slider">
-          Confidence threshold: <span id="confidence-value">0.50</span>
-        </label>
-        <input type="range" id="confidence-slider" min="0.2" max="0.9" step="0.05" value="0.5" />
+    <!-- FEATURES SECTION -->
+    <section class="features-section">
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🎤</div>
+          <h3>Eyes-Free Navigation</h3>
+          <p>Voice-first indoor navigation without looking at the screen</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📷</div>
+          <h3>AI Target Lock</h3>
+          <p>Scan once to lock your destination using AI vision</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🧭</div>
+          <h3>Step-by-Step Guidance</h3>
+          <p>Clear left and right instructions with live step counting</p>
+        </div>
       </div>
-
-      <div class="control-group">
-        <label for="target-select">Target object (optional):</label>
-        <select id="target-select">
-          <option value="">Any (All Objects)</option>
-          <optgroup label="People & Animals">
-            <option value="person">Person</option>
-            <option value="cat">Cat</option>
-            <option value="dog">Dog</option>
-            <option value="bird">Bird</option>
-            <option value="horse">Horse</option>
-            <option value="cow">Cow</option>
-            <option value="sheep">Sheep</option>
-          </optgroup>
-          <optgroup label="Vehicles">
-            <option value="car">Car</option>
-            <option value="bicycle">Bicycle</option>
-            <option value="motorcycle">Motorcycle</option>
-            <option value="bus">Bus</option>
-            <option value="truck">Truck</option>
-            <option value="train">Train</option>
-            <option value="boat">Boat</option>
-            <option value="airplane">Airplane</option>
-          </optgroup>
-          <optgroup label="Furniture">
-            <option value="chair">Chair</option>
-            <option value="couch">Couch / Sofa</option>
-            <option value="bed">Bed</option>
-            <option value="dining table">Dining Table</option>
-            <option value="bench">Bench</option>
-          </optgroup>
-          <optgroup label="Electronics">
-            <option value="cell phone">Phone / Mobile</option>
-            <option value="laptop">Laptop</option>
-            <option value="tv">TV / Television</option>
-            <option value="remote">Remote Control</option>
-            <option value="keyboard">Keyboard</option>
-            <option value="mouse">Mouse</option>
-            <option value="clock">Clock</option>
-          </optgroup>
-          <optgroup label="Kitchen Items">
-            <option value="bottle">Bottle</option>
-            <option value="cup">Cup</option>
-            <option value="bowl">Bowl</option>
-            <option value="fork">Fork</option>
-            <option value="knife">Knife</option>
-            <option value="spoon">Spoon</option>
-            <option value="microwave">Microwave</option>
-            <option value="oven">Oven</option>
-            <option value="toaster">Toaster</option>
-            <option value="refrigerator">Refrigerator</option>
-            <option value="sink">Sink</option>
-          </optgroup>
-          <optgroup label="Food & Drinks">
-            <option value="apple">Apple</option>
-            <option value="banana">Banana</option>
-            <option value="orange">Orange</option>
-            <option value="sandwich">Sandwich</option>
-            <option value="pizza">Pizza</option>
-            <option value="hot dog">Hot Dog</option>
-            <option value="cake">Cake</option>
-            <option value="donut">Donut</option>
-            <option value="wine glass">Wine Glass</option>
-          </optgroup>
-          <optgroup label="Personal Items">
-            <option value="backpack">Backpack</option>
-            <option value="handbag">Handbag / Purse</option>
-            <option value="suitcase">Suitcase</option>
-            <option value="umbrella">Umbrella</option>
-            <option value="tie">Tie</option>
-            <option value="book">Book</option>
-            <option value="scissors">Scissors</option>
-            <option value="toothbrush">Toothbrush</option>
-            <option value="hair drier">Hair Dryer</option>
-          </optgroup>
-          <optgroup label="Sports & Recreation">
-            <option value="sports ball">Sports Ball</option>
-            <option value="baseball bat">Baseball Bat</option>
-            <option value="baseball glove">Baseball Glove</option>
-            <option value="tennis racket">Tennis Racket</option>
-            <option value="skateboard">Skateboard</option>
-            <option value="surfboard">Surfboard</option>
-            <option value="skis">Skis</option>
-            <option value="snowboard">Snowboard</option>
-            <option value="kite">Kite</option>
-            <option value="frisbee">Frisbee</option>
-          </optgroup>
-          <optgroup label="Other Objects">
-            <option value="door">Door</option>
-            <option value="traffic light">Traffic Light</option>
-            <option value="stop sign">Stop Sign</option>
-            <option value="fire hydrant">Fire Hydrant</option>
-            <option value="parking meter">Parking Meter</option>
-            <option value="potted plant">Potted Plant</option>
-            <option value="toilet">Toilet</option>
-            <option value="vase">Vase</option>
-            <option value="teddy bear">Teddy Bear</option>
-          </optgroup>
-        </select>
-      </div>
-
-      <p class="hint">
-        For best experience: use your rear camera, keep the phone at chest height,
-        and move slowly. A sighted helper can also see boxes on screen.
-      </p>
-
-      <p class="hint" id="voice-target-hint">
-        💡 When you start the app, it will automatically ask you to say a target object name. Say "person", "chair", "bottle", "car", "phone", "laptop", or "any" to detect all objects. Supports 80+ objects!
-      </p>
     </section>
-  </main>
 
-  <script src="app.js"></script>
+    <!-- FOOTER -->
+    <footer class="footer-note">
+      <p>
+        VocalPath is designed for visually impaired users, emergency
+        evacuations, and zero-visibility environments.
+      </p>
+    </footer>
+
+    <!-- FIXED ACTION BUTTONS -->
+    <div class="fixed-actions">
+      <button class="fixed-card start-fixed" onclick="navigateTo('detect.html')" aria-label="Start Navigation">
+        <span class="btn-icon">🧭</span>
+        <span>Start</span>
+      </button>
+
+      <button class="fixed-card help-fixed" onclick="navigateTo('guide.html')" aria-label="Help & Guidance">
+        <span class="btn-icon">☁️</span>
+        <span>Help</span>
+      </button>
+    </div>
+  </div>
+
+  <script>
+    // Navigation helper
+    function navigateTo(page) {
+      window.location.href = page;
+    }
+
+    // Welcome speech on load
+    window.addEventListener('DOMContentLoaded', () => {
+      if ('speechSynthesis' in window) {
+        const msg = new SpeechSynthesisUtterance(
+          "Welcome to Vocal Path. " +
+          "Tap the bottom left button to start navigation. " +
+          "Tap the bottom right button to learn how to use the app."
+        );
+        msg.rate = 0.9;
+        msg.volume = 1;
+        window.speechSynthesis.speak(msg);
+      }
+    });
+  </script>
 </body>
-</html>
 
+</html>
