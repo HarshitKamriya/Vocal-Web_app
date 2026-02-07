@@ -1,80 +1,113 @@
-## Vocal Path – Full-Stack Structure
+# Vocal Path - AI Vision Assistant
 
-This project is now split into a **frontend client** and a **backend server**:
+AI-powered vision assistant for visually impaired users featuring real-time object detection, currency detection, and emergency mode.
 
-- `client/` – Pure browser app (HTML/CSS/JS) that:
-  - Opens the **phone camera** (rear preferred).
-  - Runs **real-time object detection** fully in the browser using **YOLOv8 (ONNX Runtime Web)**.
-  - Detects **80+ common daily-life objects** (people, vehicles, furniture, electronics, food, personal items, sports equipment, and more).
-  - Draws **bounding boxes and labels** over the live video.
-  - Provides **spoken guidance** (“Person in front, near.”) using the **Web Speech API**.
-  - Adds **spatial hints**: Left / Center / Right + Near / Far.
-  - Supports **target object mode** (select from 80+ objects or use voice commands), **vibration on target**, and a **confidence slider**.
-  - **Voice target selection**: Say object names like "person", "car", "bottle", "laptop" to set target.
+## Features
 
-- `server/` – Minimal **Node/Express** backend that:
-  - Serves the static files from `client/`.
-  - Exposes a health route at `/api/health`.
-  - Can be extended with more APIs (e.g., analytics, user profiles) without touching the client.
+- 🎯 **Object Detection** - Real-time detection using YOLOv8 with voice guidance
+- 💵 **Currency Detection** - Identify Indian currency notes (₹10-₹2000)
+- 🆘 **Emergency Mode** - SOS alert with location sharing (hold for 2 seconds)
+- 🎤 **Voice Guidance** - Hands-free navigation with audio feedback
+- 📱 **Mobile First** - Optimized for mobile devices with PWA support
 
-### Client Files (`client/`)
+## Quick Start
 
-- `index.html` – Layout, camera/video elements, controls, and script imports.
-- `style.css` – High-contrast, mobile-first, accessible styles.
-- `app.js` – Camera access, detection pipeline, drawing, voice guidance, and controls.
+```bash
+# Clone the repository
+git clone <your-repo-url>
+cd vocal-path
 
-### Server Files (`server/`)
+# Install dependencies
+npm install
 
-- `server.js` – Express server that serves `client/` and exposes `/api/health`.
-- `package.json` – Node dependencies and scripts.
+# Start the server
+npm start
+```
 
-### How to Run (Recommended: via backend)
+Visit `http://localhost:4000` in your browser.
 
-1. Open a terminal in the project root and install server dependencies:
-   - `cd server`
-   - `npm install`
-2. Start the backend (which serves the frontend):
-   - `npm start`
-3. Open `http://localhost:4000` in your desktop or mobile browser (same network).
-4. On mobile, for best experience:
-   - Use Chrome or Edge on Android, or Safari on iOS.
-   - Allow **camera access** when prompted.
-   - Tap **“Start Guidance”** if auto-start is blocked by the browser.
+## Deployment
 
-### Detection & Voice Flow (Client – YOLOv8 + ONNX Runtime)
+### Option 1: Render (Recommended)
+1. Push your code to GitHub
+2. Go to [render.com](https://render.com) and create a new Web Service
+3. Connect your GitHub repository
+4. Render will automatically detect the configuration from `render.yaml`
+5. Click "Create Web Service"
 
-1. **Camera**: `navigator.mediaDevices.getUserMedia` with `facingMode: "environment"` tries to use the **rear camera**, falling back to any camera if needed.
-2. **Model**: `onnxruntime-web` loads a **YOLOv8n ONNX** model via `ort.InferenceSession.create("models/yolov8n.onnx")`.
-3. **Loop**:
-   - Every ~150 ms, capture a video frame, resize to 640×640, and run YOLOv8 in the browser.
-   - Filter predictions by **confidence** and optional **target object**.
-   - Draw bounding boxes and labels onto the canvas overlay.
-   - Compute **Left / Center / Right** and **Near / Far** from the bounding boxes.
-   - Decide if and what to speak:
-     - Avoid repeating the same object-position combo for at least 4 seconds.
-     - Enforce a global minimum gap between voice messages.
-4. **Voice**: Uses `speechSynthesis.speak()` for clear, slightly slowed speech.
-5. **Accessibility**:
-   - High-contrast visuals for helpers.
-   - Large buttons and simple copy for blind/low-vision users.
-   - Optional **vibration** when the target object is detected.
+### Option 2: Railway
+1. Push your code to GitHub
+2. Go to [railway.app](https://railway.app)
+3. Click "New Project" → "Deploy from GitHub repo"
+4. Select your repository
+5. Railway will automatically deploy using the `Procfile`
 
-### Supported Objects (80+ COCO Classes)
+### Option 3: Vercel
+1. Install Vercel CLI: `npm i -g vercel`
+2. Run: `vercel` in the project directory
+3. Follow the prompts
 
-The app can detect and guide users to:
-- **People & Animals**: person, cat, dog, bird, horse, cow, sheep, and more
-- **Vehicles**: car, bicycle, motorcycle, bus, truck, train, boat, airplane
-- **Furniture**: chair, couch, bed, dining table, bench
-- **Electronics**: cell phone, laptop, TV, remote, keyboard, mouse, clock
-- **Kitchen Items**: bottle, cup, bowl, fork, knife, spoon, microwave, oven, refrigerator, sink
-- **Food & Drinks**: apple, banana, orange, sandwich, pizza, cake, donut, wine glass
-- **Personal Items**: backpack, handbag, suitcase, umbrella, book, scissors, toothbrush
-- **Sports Equipment**: sports ball, baseball bat, tennis racket, skateboard, surfboard, skis
-- **And many more**: door, traffic light, stop sign, potted plant, vase, teddy bear, etc.
+### Option 4: Heroku
+```bash
+# Login to Heroku
+heroku login
 
-Voice commands support synonyms (e.g., "phone" → "cell phone", "sofa" → "couch", "fridge" → "refrigerator").
+# Create a new app
+heroku create your-app-name
 
-You can customize the browser behavior (thresholds, phrases, detection interval, target list) in `client/app.js`,
-and expand backend APIs in `server/server.js`.
+# Deploy
+git push heroku main
 
+# Open the app
+heroku open
+```
 
+### Option 5: Ngrok (For Testing)
+```bash
+# Start the server
+npm start
+
+# In another terminal, expose it
+ngrok http 4000
+```
+
+## Project Structure
+
+```
+vocal-path/
+├── client/           # Frontend files
+│   ├── index.html    # Home page
+│   ├── detect.html   # Detection page
+│   ├── guide.html    # Help/Guide page
+│   ├── app.js        # Main JavaScript
+│   └── style.css     # Styles
+├── models/           # AI Models (ONNX)
+│   ├── yolov8n.onnx  # Object detection
+│   └── currency_detector.onnx  # Currency detection
+├── server/           # Backend
+│   └── server.js     # Express server
+├── package.json      # Dependencies
+├── Procfile          # Heroku/Railway config
+├── vercel.json       # Vercel config
+└── render.yaml       # Render config
+```
+
+## Usage
+
+1. **Home Page**: Tap "Start" to begin detection or "Help" for instructions
+2. **Detection Mode**: 
+   - Tap green button = Start guidance
+   - Hold green button (1.5s) = Currency detection
+   - Hold red button (2s) = Emergency mode
+3. **Voice Commands**: Double-tap to set target object by voice
+
+## Tech Stack
+
+- **Frontend**: Vanilla JS, HTML5, CSS3
+- **Backend**: Node.js, Express
+- **AI**: ONNX Runtime Web, YOLOv8
+- **APIs**: Web Speech API, Geolocation API
+
+## License
+
+MIT

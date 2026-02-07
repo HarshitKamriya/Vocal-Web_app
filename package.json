@@ -1,0 +1,28 @@
+{
+    "name": "vocal-path",
+    "version": "1.0.0",
+    "description": "AI-powered vision assistant for visually impaired users with object detection, currency detection, and emergency mode",
+    "main": "server/server.js",
+    "scripts": {
+        "start": "node server/server.js",
+        "dev": "node server/server.js"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    },
+    "dependencies": {
+        "cors": "^2.8.5",
+        "express": "^4.21.0",
+        "morgan": "^1.10.0"
+    },
+    "keywords": [
+        "accessibility",
+        "vision-assistant",
+        "object-detection",
+        "currency-detection",
+        "voice-guidance",
+        "pwa"
+    ],
+    "author": "",
+    "license": "MIT"
+}

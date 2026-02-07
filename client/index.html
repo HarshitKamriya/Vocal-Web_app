@@ -113,16 +113,28 @@
       msg.rate = 0.9;
       msg.volume = 1;
 
-      // Small delay to ensure speechSynthesis is ready
-      setTimeout(() => {
+      // Wait for voices to be available
+      const voices = speechSynthesis.getVoices();
+      if (voices.length > 0) {
         speechSynthesis.speak(msg);
-      }, 100);
+      } else {
+        // Voices not loaded yet, wait and retry
+        speechSynthesis.onvoiceschanged = () => {
+          speechSynthesis.speak(msg);
+        };
+        // Also try after a delay as fallback
+        setTimeout(() => {
+          speechSynthesis.speak(msg);
+        }, 500);
+      }
     }
 
     // Try to speak on load
     window.addEventListener('DOMContentLoaded', () => {
-      // Attempt to speak - may be blocked by browser
-      speakWelcome();
+      // Small delay to let browser initialize
+      setTimeout(() => {
+        speakWelcome();
+      }, 300);
     });
 
     // Also speak on first user interaction (handles browser autoplay policy)

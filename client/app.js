@@ -169,6 +169,32 @@ function getStatusLabel() {
   return document.getElementById("status-label");
 }
 
+// Auto-start guidance when entering detect page
+function autoStartGuidance() {
+  // Speak welcome message
+  const welcomeMsg = "Welcome to guidance mode. " +
+    "Tap the green button to start detection, or hold it for currency detection. " +
+    "Hold the red button for emergency mode.";
+
+  getStatusLabel().textContent = "Tap green button to start, or hold for currency";
+
+  // Speak after a short delay to ensure speech synthesis is ready
+  setTimeout(() => {
+    speak(welcomeMsg);
+  }, 500);
+
+  // Auto-start the camera and model after welcome
+  setTimeout(() => {
+    if (!isRunning) {
+      getStatusLabel().textContent = "Starting camera...";
+      startApp().catch((err) => {
+        console.warn("Auto-start failed:", err);
+        getStatusLabel().textContent = "Tap green button to start guidance";
+      });
+    }
+  }, 4000);
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   videoEl = document.getElementById("video");
   canvasEl = document.getElementById("overlay");
@@ -207,8 +233,8 @@ window.addEventListener("DOMContentLoaded", () => {
   initCommandRecognition();
   initDoubleTapHandler();
 
-  // Don't auto-start - wait for user to click "Start Guidance" button
-  // This ensures proper permissions and user intent
+  // Auto-start guidance when entering detect page
+  autoStartGuidance();
 });
 
 async function initCamera() {
