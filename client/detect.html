@@ -44,10 +44,35 @@
             <p class="hint" id="voice-target-hint">Say object name for target.</p>
         </div>
 
-        <!-- Footer: only visible control -->
-        <footer class="detect-footer">
-            <button type="button" id="voice-target-btn" class="detect-mic-btn" aria-label="Set target by voice">🎤 Set target by voice</button>
+        <!-- Footer: Two main action buttons -->
+        <footer class="detect-footer detect-footer--dual">
+            <button type="button" id="currency-detect-btn" class="detect-action-btn detect-action-btn--currency" aria-label="Currency Detection">
+                <span class="detect-action-icon">💵</span>
+                <span class="detect-action-label">Currency</span>
+            </button>
+            <button type="button" id="emergency-btn" class="detect-action-btn detect-action-btn--emergency" aria-label="Emergency Mode - Hold to activate">
+                <span class="detect-action-icon">🆘</span>
+                <span class="detect-action-label">Emergency</span>
+            </button>
         </footer>
+
+        <!-- Emergency Mode Overlay -->
+        <div id="emergency-overlay" class="emergency-overlay" aria-hidden="true">
+            <div class="emergency-content">
+                <div class="emergency-pulse-ring"></div>
+                <div class="emergency-icon">🚨</div>
+                <h1 class="emergency-title">EMERGENCY ALERT</h1>
+                <p class="emergency-message">Help is on the way!</p>
+                <p class="emergency-sub">Notifying your emergency contacts...</p>
+                <div class="emergency-location">
+                    <span class="emergency-location-icon">📍</span>
+                    <span id="emergency-location-text">Fetching location...</span>
+                </div>
+                <button type="button" id="cancel-emergency-btn" class="emergency-cancel-btn">
+                    Cancel Emergency
+                </button>
+            </div>
+        </div>
     </div>
 
     <script src="app.js"></script>

@@ -956,3 +956,331 @@ button {
     border: 2px solid currentColor;
   }
 }
+
+/* ================================
+   DUAL FOOTER BUTTONS (Currency + Emergency)
+================================ */
+.detect-footer--dual {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem;
+  padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+}
+
+.detect-action-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.25rem 1rem;
+  border: none;
+  border-radius: 20px;
+  cursor: pointer;
+  font-weight: 700;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.detect-action-icon {
+  font-size: 2rem;
+}
+
+.detect-action-label {
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Currency Detection Button */
+.detect-action-btn--currency {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+}
+
+.detect-action-btn--currency:hover:not(:disabled) {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 6px 24px rgba(16, 185, 129, 0.5);
+}
+
+.detect-action-btn--currency:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.detect-action-btn--currency.active {
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+  animation: currencyPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes currencyPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
+  50% { box-shadow: 0 0 0 10px rgba(16, 185, 129, 0); }
+}
+
+/* Emergency Button */
+.detect-action-btn--emergency {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  color: white;
+  position: relative;
+  overflow: hidden;
+}
+
+.detect-action-btn--emergency::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.detect-action-btn--emergency:hover:not(:disabled)::before {
+  opacity: 1;
+}
+
+.detect-action-btn--emergency:hover:not(:disabled) {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 6px 24px rgba(239, 68, 68, 0.5);
+}
+
+.detect-action-btn--emergency:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.detect-action-btn--emergency.pressing {
+  animation: emergencyPress 0.5s ease forwards;
+}
+
+@keyframes emergencyPress {
+  0% { transform: scale(1); }
+  100% { transform: scale(0.92); box-shadow: 0 0 30px rgba(239, 68, 68, 0.8); }
+}
+
+.detect-action-btn--emergency .detect-action-icon,
+.detect-action-btn--emergency .detect-action-label {
+  position: relative;
+  z-index: 1;
+}
+
+/* Hold progress indicator */
+.detect-action-btn--emergency .hold-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 4px;
+  background: #fef2f2;
+  width: 0;
+  transition: width 0.1s linear;
+  z-index: 2;
+}
+
+/* ================================
+   EMERGENCY OVERLAY
+================================ */
+.emergency-overlay {
+  position: fixed;
+  inset: 0;
+  background: linear-gradient(135deg, #b91c1c 0%, #7f1d1d 100%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.emergency-overlay[aria-hidden="false"] {
+  opacity: 1;
+  visibility: visible;
+}
+
+.emergency-content {
+  text-align: center;
+  padding: 2rem;
+  color: white;
+  position: relative;
+}
+
+.emergency-pulse-ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 200px;
+  height: 200px;
+  border-radius: 50%;
+  border: 4px solid rgba(255, 255, 255, 0.3);
+  animation: emergencyPulseRing 1.5s ease-out infinite;
+}
+
+@keyframes emergencyPulseRing {
+  0% {
+    transform: translate(-50%, -50%) scale(0.8);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(2.5);
+    opacity: 0;
+  }
+}
+
+.emergency-icon {
+  font-size: 5rem;
+  animation: emergencyBounce 0.6s ease-in-out infinite;
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes emergencyBounce {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
+
+.emergency-title {
+  font-size: 2.5rem;
+  font-weight: 900;
+  margin: 1.5rem 0 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  animation: emergencyFlash 1s ease-in-out infinite;
+}
+
+@keyframes emergencyFlash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.emergency-message {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.emergency-sub {
+  font-size: 1rem;
+  opacity: 0.9;
+  margin-bottom: 1.5rem;
+}
+
+.emergency-location {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 12px;
+  margin-bottom: 2rem;
+}
+
+.emergency-location-icon {
+  font-size: 1.5rem;
+  animation: locationPing 1.5s ease-in-out infinite;
+}
+
+@keyframes locationPing {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+}
+
+#emergency-location-text {
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.emergency-cancel-btn {
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: 2px solid white;
+  padding: 1rem 2rem;
+  font-size: 1rem;
+  font-weight: 700;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.emergency-cancel-btn:hover {
+  background: white;
+  color: #b91c1c;
+}
+
+.emergency-cancel-btn:active {
+  transform: scale(0.95);
+}
+
+/* Emergency mode body class - prevents scrolling */
+body.emergency-active {
+  overflow: hidden;
+}
+
+/* Audio playing indicator for emergency */
+.emergency-audio-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  justify-content: center;
+  font-size: 0.9rem;
+  opacity: 0.8;
+}
+
+.emergency-audio-bars {
+  display: flex;
+  gap: 3px;
+  align-items: flex-end;
+  height: 20px;
+}
+
+.emergency-audio-bar {
+  width: 4px;
+  background: white;
+  border-radius: 2px;
+  animation: audioBar 0.8s ease-in-out infinite;
+}
+
+.emergency-audio-bar:nth-child(1) { height: 8px; animation-delay: 0s; }
+.emergency-audio-bar:nth-child(2) { height: 16px; animation-delay: 0.1s; }
+.emergency-audio-bar:nth-child(3) { height: 10px; animation-delay: 0.2s; }
+.emergency-audio-bar:nth-child(4) { height: 20px; animation-delay: 0.3s; }
+.emergency-audio-bar:nth-child(5) { height: 12px; animation-delay: 0.4s; }
+
+@keyframes audioBar {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(0.4); }
+}
+
+/* Mobile responsiveness for dual buttons */
+@media (max-width: 400px) {
+  .detect-footer--dual {
+    gap: 0.75rem;
+    padding: 0.75rem;
+  }
+
+  .detect-action-btn {
+    padding: 1rem 0.75rem;
+    border-radius: 16px;
+  }
+
+  .detect-action-icon {
+    font-size: 1.5rem;
+  }
+
+  .detect-action-label {
+    font-size: 0.75rem;
+  }
+
+  .emergency-title {
+    font-size: 1.75rem;
+  }
+
+  .emergency-icon {
+    font-size: 3.5rem;
+  }
+}

@@ -90,22 +90,68 @@
   </div>
 
   <script>
-    // Navigation helper
+    // Navigation helper - also stops any ongoing speech
     function navigateTo(page) {
+      if ('speechSynthesis' in window) {
+        speechSynthesis.cancel();
+      }
       window.location.href = page;
     }
 
-    // Welcome speech on load
+    // Welcome speech function
+    function speakWelcome() {
+      if (!('speechSynthesis' in window)) return;
+
+      // Cancel any existing speech first
+      speechSynthesis.cancel();
+
+      const msg = new SpeechSynthesisUtterance(
+        "Welcome to Vocal Path. " +
+        "Tap the bottom left button to start detection. " +
+        "Tap the bottom right button to learn how to use the app."
+      );
+      msg.rate = 0.9;
+      msg.volume = 1;
+
+      // Small delay to ensure speechSynthesis is ready
+      setTimeout(() => {
+        speechSynthesis.speak(msg);
+      }, 100);
+    }
+
+    // Try to speak on load
     window.addEventListener('DOMContentLoaded', () => {
+      // Attempt to speak - may be blocked by browser
+      speakWelcome();
+    });
+
+    // Also speak on first user interaction (handles browser autoplay policy)
+    let hasSpoken = false;
+    document.addEventListener('click', () => {
+      if (!hasSpoken) {
+        hasSpoken = true;
+        speakWelcome();
+      }
+    }, { once: false });
+
+    // Speak on touch for mobile
+    document.addEventListener('touchstart', () => {
+      if (!hasSpoken) {
+        hasSpoken = true;
+        speakWelcome();
+      }
+    }, { once: false, passive: true });
+
+    // Stop speech when leaving the page
+    window.addEventListener('beforeunload', () => {
       if ('speechSynthesis' in window) {
-        const msg = new SpeechSynthesisUtterance(
-          "Welcome to Vocal Path. " +
-          "Tap the bottom left button to start navigation. " +
-          "Tap the bottom right button to learn how to use the app."
-        );
-        msg.rate = 0.9;
-        msg.volume = 1;
-        window.speechSynthesis.speak(msg);
+        speechSynthesis.cancel();
+      }
+    });
+
+    window.addEventListener('pagehide', () => {
+      if ('speechSynthesis' in window) {
+        speechSynthesis.cancel();
       }
     });
   </script>

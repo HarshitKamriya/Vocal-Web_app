@@ -150,12 +150,20 @@ let detectionStarted = false; // Track if detection loop has started
 let startAppInFlight = null; // prevents double-start when buttons are tapped quickly
 
 // -------- Double-tap state machine --------
-const GUIDANCE_STATE = { STOPPED: "STOPPED", RUNNING: "RUNNING", ASK_TARGET: "ASK_TARGET" };
+const GUIDANCE_STATE = { STOPPED: "STOPPED", RUNNING: "RUNNING", ASK_TARGET: "ASK_TARGET", CURRENCY_DETECTION: "CURRENCY_DETECTION" };
+// RUNNING = Guidance Mode (voice commands active). CURRENCY_DETECTION = sub-state while detecting currency.
 let guidanceState = GUIDANCE_STATE.STOPPED;
 const DOUBLE_TAP_THRESHOLD_MS = 300;
 let lastTapTime = 0;
 let lastRunDoubleTapWasStop = false; // from RUNNING: next double-tap stops (false) or asks target (true)
 let askTargetMode = null; // null | "initial" | "while_running" (for ASK_TARGET cancel behavior)
+
+// -------- Currency detection (voice-only, Guidance Mode only) --------
+let commandRecognition = null;
+let commandRecognitionStarted = false;
+const CURRENCY_COMMAND_PHRASES = ["detect currency", "currency detection", "identify currency", "what currency"];
+const CURRENCY_COMMAND_COOLDOWN_MS = 5000;
+let lastCurrencyCommandTime = 0;
 
 function getStatusLabel() {
   return document.getElementById("status-label");
@@ -183,12 +191,20 @@ window.addEventListener("DOMContentLoaded", () => {
     currentTarget = e.target.value;
   });
 
-  const voiceTargetBtn = document.getElementById("voice-target-btn");
-  if (voiceTargetBtn) {
-    voiceTargetBtn.addEventListener("click", toggleVoiceTargetListening);
+  // Currency Detection Button - Hold to detect, Tap to start guidance
+  initCurrencyButton();
+
+  // Emergency Mode Button - Long Press to Activate
+  initEmergencyButton();
+
+  // Cancel Emergency Button
+  const cancelEmergencyBtn = document.getElementById("cancel-emergency-btn");
+  if (cancelEmergencyBtn) {
+    cancelEmergencyBtn.addEventListener("click", cancelEmergency);
   }
 
   initSpeechRecognition();
+  initCommandRecognition();
   initDoubleTapHandler();
 
   // Don't auto-start - wait for user to click "Start Guidance" button
@@ -230,10 +246,10 @@ async function initCamera() {
         err2.name === "NotAllowedError"
           ? "Permission denied. Check browser camera permissions."
           : err2.name === "NotFoundError"
-          ? "No camera device found."
-          : err2.name === "NotReadableError"
-          ? "Camera is busy or blocked by another app."
-          : err2.name || "Unknown error";
+            ? "No camera device found."
+            : err2.name === "NotReadableError"
+              ? "Camera is busy or blocked by another app."
+              : err2.name || "Unknown error";
       getStatusLabel().textContent = "Camera error: " + reason;
       throw err2;
     }
@@ -247,7 +263,7 @@ async function initCamera() {
 
   videoEl.srcObject = stream;
 
-   // Try to start playback immediately (some mobile browsers need this)
+  // Try to start playback immediately (some mobile browsers need this)
   try {
     const earlyPlay = videoEl.play();
     if (earlyPlay && typeof earlyPlay.then === "function") {
@@ -292,9 +308,9 @@ async function loadYoloModel() {
     getStatusLabel().textContent = msg;
     throw new Error(msg);
   }
-  
+
   getStatusLabel().textContent = "Loading YOLOv8 model…";
-  
+
   try {
     yoloSession = await ort.InferenceSession.create(YOLO_MODEL_URL, {
       executionProviders: ["wasm"],
@@ -304,7 +320,7 @@ async function loadYoloModel() {
   } catch (err) {
     console.error("Failed to load YOLO model:", err);
     const errorMsg = err.message || String(err);
-    
+
     if (errorMsg.includes("404") || errorMsg.includes("Failed to fetch") || errorMsg.includes("not found")) {
       const msg = `YOLO model file not found at ${YOLO_MODEL_URL}. Please download yolov8n.onnx and place it in client/models/ folder. Falling back to COCO-SSD...`;
       getStatusLabel().textContent = msg;
@@ -323,7 +339,7 @@ async function loadYoloModel() {
 // Fallback to COCO-SSD if YOLO fails
 async function loadCocoSsdFallback() {
   getStatusLabel().textContent = "Loading COCO-SSD fallback model…";
-  
+
   // Load TensorFlow.js and COCO-SSD dynamically
   if (!window.tf) {
     await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.21.0/dist/tf.min.js");
@@ -331,11 +347,11 @@ async function loadCocoSsdFallback() {
   if (!window.cocoSsd) {
     await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js");
   }
-  
+
   if (!window.cocoSsd) {
     throw new Error("Failed to load COCO-SSD fallback. Check your internet connection.");
   }
-  
+
   const model = await cocoSsd.load({ base: "lite_mobilenet_v2" });
   // Wrap COCO-SSD model to work with our detection loop
   yoloSession = {
@@ -364,58 +380,58 @@ async function startApp(options = {}) {
 
   startAppInFlight = (async () => {
     isRunning = true;
-  const startBtn = document.getElementById("start-btn");
-  
-  try {
-    // Start camera first so the user immediately sees video,
-    // then load the model (which may take a few seconds the first time).
-    await initCamera();
+    const startBtn = document.getElementById("start-btn");
 
-    getStatusLabel().textContent =
-      "Camera ready. Loading detection model… This may take a few seconds.";
+    try {
+      // Start camera first so the user immediately sees video,
+      // then load the model (which may take a few seconds the first time).
+      await initCamera();
 
-    await loadYoloModel();
-    
-    // If we were launched via "Set Target by Voice", don't auto-prompt here.
-    if (options.skipAutoTargetPrompt) {
       getStatusLabel().textContent =
-        "Ready. Tap “Set Target by Voice” and say the object name.";
+        "Camera ready. Loading detection model… This may take a few seconds.";
+
+      await loadYoloModel();
+
+      // If we were launched via "Set Target by Voice", don't auto-prompt here.
+      if (options.skipAutoTargetPrompt) {
+        getStatusLabel().textContent =
+          "Ready. Tap “Set Target by Voice” and say the object name.";
+        if (startBtn) {
+          startBtn.textContent = "Ready";
+          startBtn.disabled = false;
+        }
+        return;
+      }
+
+      // Default flow: automatically prompt for target via voice
+      getStatusLabel().textContent = "Ready. Asking for target object…";
+      startBtn.textContent = "Waiting for target…";
+      startBtn.disabled = true;
+
+      // Wait a moment for camera to stabilize, then ask for target
+      setTimeout(() => {
+        askForTargetAutomatically();
+      }, 1000);
+
+    } catch (err) {
+      console.error("Start app error:", err);
+      const reason =
+        err && err.name
+          ? `${err.name}: ${err.message || ""}`
+          : err && err.message
+            ? err.message
+            : "Unknown error";
+      getStatusLabel().textContent = "Could not start guidance: " + reason;
+      isRunning = false;
+      // Re-enable button so user can try again
       if (startBtn) {
-        startBtn.textContent = "Ready";
+        startBtn.textContent = "Start Guidance";
         startBtn.disabled = false;
       }
-      return;
+      throw err;
+    } finally {
+      startAppInFlight = null;
     }
-
-    // Default flow: automatically prompt for target via voice
-    getStatusLabel().textContent = "Ready. Asking for target object…";
-    startBtn.textContent = "Waiting for target…";
-    startBtn.disabled = true;
-    
-    // Wait a moment for camera to stabilize, then ask for target
-    setTimeout(() => {
-      askForTargetAutomatically();
-    }, 1000);
-    
-  } catch (err) {
-    console.error("Start app error:", err);
-    const reason =
-      err && err.name
-        ? `${err.name}: ${err.message || ""}`
-        : err && err.message
-        ? err.message
-        : "Unknown error";
-    getStatusLabel().textContent = "Could not start guidance: " + reason;
-    isRunning = false;
-    // Re-enable button so user can try again
-    if (startBtn) {
-      startBtn.textContent = "Start Guidance";
-      startBtn.disabled = false;
-    }
-    throw err;
-  } finally {
-    startAppInFlight = null;
-  }
   })();
 
   return startAppInFlight;
@@ -433,7 +449,7 @@ function askForTargetAutomatically() {
     }, 2000);
     return;
   }
-  
+
   waitingForInitialTarget = true;
   guidanceState = GUIDANCE_STATE.ASK_TARGET;
   askTargetMode = "initial";
@@ -495,6 +511,11 @@ function handleDoubleTap() {
       });
       break;
 
+    case GUIDANCE_STATE.CURRENCY_DETECTION:
+      lastRunDoubleTapWasStop = true;
+      stopDetection();
+      break;
+
     case GUIDANCE_STATE.RUNNING:
       if (lastRunDoubleTapWasStop) {
         lastRunDoubleTapWasStop = false;
@@ -538,6 +559,114 @@ function initDoubleTapHandler() {
   });
 }
 
+// -------- Currency detection: voice command only, Guidance Mode only --------
+
+function initCommandRecognition() {
+  const SpeechRecognition =
+    window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) return;
+  commandRecognition = new SpeechRecognition();
+  commandRecognition.lang = "en-US";
+  commandRecognition.continuous = true;
+  commandRecognition.interimResults = true;
+
+  commandRecognition.onresult = (event) => {
+    if (!event.results || event.results.length === 0) return;
+    const result = event.results[event.results.length - 1];
+    if (!result.isFinal) return;
+    const transcript = (result[0] && result[0].transcript) ? result[0].transcript.toLowerCase().trim() : "";
+    if (!transcript) return;
+    const matched = CURRENCY_COMMAND_PHRASES.some((phrase) =>
+      transcript.includes(phrase)
+    );
+    if (matched) handleCurrencyCommand(transcript);
+  };
+
+  commandRecognition.onerror = (event) => {
+    if (event.error === "no-speech" || event.error === "aborted") return;
+    console.warn("Command recognition error", event.error);
+  };
+}
+
+function startCommandRecognitionIfNeeded() {
+  if (!commandRecognition || commandRecognitionStarted) return;
+  try {
+    commandRecognition.start();
+    commandRecognitionStarted = true;
+  } catch (e) {
+    console.warn("Command recognition start failed", e);
+  }
+}
+
+function handleCurrencyCommand(transcript) {
+  const now = Date.now();
+  if (now - lastCurrencyCommandTime < CURRENCY_COMMAND_COOLDOWN_MS) return;
+  lastCurrencyCommandTime = now;
+
+  const inGuidanceMode =
+    guidanceState === GUIDANCE_STATE.RUNNING ||
+    guidanceState === GUIDANCE_STATE.CURRENCY_DETECTION;
+
+  if (!inGuidanceMode) {
+    speak("Currency detection is only available in Guidance Mode.");
+    return;
+  }
+
+  if (guidanceState === GUIDANCE_STATE.CURRENCY_DETECTION) return;
+
+  runCurrencyDetection();
+}
+
+async function runCurrencyDetection() {
+  const wasRunning = guidanceState === GUIDANCE_STATE.RUNNING;
+  guidanceState = GUIDANCE_STATE.CURRENCY_DETECTION;
+  getStatusLabel().textContent = "Detecting currency…";
+
+  speak("Detecting currency.");
+
+  try {
+    const result = await detectCurrencyFromFrame();
+    if (guidanceState === GUIDANCE_STATE.STOPPED) return;
+    guidanceState = GUIDANCE_STATE.RUNNING;
+    getStatusLabel().textContent = result;
+    speak(result);
+  } catch (err) {
+    console.error("Currency detection error", err);
+    if (guidanceState !== GUIDANCE_STATE.STOPPED) {
+      guidanceState = GUIDANCE_STATE.RUNNING;
+      const msg = "Currency detection failed. Please try again.";
+      getStatusLabel().textContent = msg;
+      speak(msg);
+    }
+  }
+}
+
+/**
+ * Analyze current video frame for currency. Replace with real model/API.
+ * @returns {Promise<string>} Denomination text to announce (e.g. "20 dollar bill").
+ */
+async function detectCurrencyFromFrame() {
+  if (!videoEl || videoEl.readyState < 2) {
+    return "Camera not ready. Please try again.";
+  }
+  const w = videoEl.videoWidth;
+  const h = videoEl.videoHeight;
+  if (!w || !h) return "Unable to capture image.";
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(videoEl, 0, 0, w, h);
+  const imageData = ctx.getImageData(0, 0, w, h);
+
+  // Placeholder: no real currency model. Integrate your model or API here.
+  // Example: call an external API or run a local TensorFlow/ONNX currency model.
+  await new Promise((r) => setTimeout(r, 800));
+
+  return "Currency detection is not configured. Add a model or API to identify denominations.";
+}
+
 // Start the detection loop
 function startDetection() {
   if (detectionStarted) return;
@@ -553,6 +682,7 @@ function startDetection() {
     startBtn.textContent = "Running";
     startBtn.disabled = true;
   }
+  startCommandRecognitionIfNeeded();
   detectionLoop();
 }
 
@@ -864,8 +994,8 @@ function buildPhrase(pred, spatial) {
     spatial.horizontal === "center"
       ? "in front"
       : spatial.horizontal === "left"
-      ? "on the left"
-      : "on the right";
+        ? "on the left"
+        : "on the right";
 
   let distanceText;
   if (spatial.distance === "very near") distanceText = "very close";
@@ -886,6 +1016,7 @@ function capitalize(s) {
 
 function handleVoiceGuidance(predictions) {
   if (!voiceOn || !("speechSynthesis" in window)) return;
+  if (guidanceState === GUIDANCE_STATE.CURRENCY_DETECTION) return;
 
   const now = performance.now();
   if (now - lastSpeakTime < GLOBAL_SPEAK_INTERVAL_MS) {
@@ -926,12 +1057,10 @@ function handleVoiceGuidance(predictions) {
   // If object is extremely close (1–2 steps), say "Target found" and stop guidance.
   if (roundedSteps <= TARGET_FOUND_MAX_STEPS) {
     const foundText = currentTarget
-      ? `Target ${best.class} found. It is within ${roundedSteps} step${
-          roundedSteps === 1 ? "" : "s"
-        }. Stopping guidance.`
-      : `Object ${best.class} found. It is within ${roundedSteps} step${
-          roundedSteps === 1 ? "" : "s"
-        }. Stopping guidance.`;
+      ? `Target ${best.class} found. It is within ${roundedSteps} step${roundedSteps === 1 ? "" : "s"
+      }. Stopping guidance.`
+      : `Object ${best.class} found. It is within ${roundedSteps} step${roundedSteps === 1 ? "" : "s"
+      }. Stopping guidance.`;
 
     speak(foundText);
     getStatusLabel().textContent = foundText;
@@ -949,8 +1078,8 @@ function handleVoiceGuidance(predictions) {
     spatial.horizontal === "center"
       ? "ahead"
       : spatial.horizontal === "left"
-      ? "to your left"
-      : "to your right";
+        ? "to your left"
+        : "to your right";
 
   const mapKey = `${best.class}-${spatial.horizontal}`;
   const lastInfo = lastStepsMap[mapKey];
@@ -975,13 +1104,11 @@ function handleVoiceGuidance(predictions) {
 
   let phrase;
   if (currentTarget) {
-    phrase = `Target ${best.class}, about ${roundedSteps} step${
-      roundedSteps === 1 ? "" : "s"
-    } ${sideText}${trendText ? `, ${trendText}` : ""}.`;
+    phrase = `Target ${best.class}, about ${roundedSteps} step${roundedSteps === 1 ? "" : "s"
+      } ${sideText}${trendText ? `, ${trendText}` : ""}.`;
   } else {
-    phrase = `${capitalize(best.class)}, about ${roundedSteps} step${
-      roundedSteps === 1 ? "" : "s"
-    } ${sideText}${trendText ? `, ${trendText}` : ""}.`;
+    phrase = `${capitalize(best.class)}, about ${roundedSteps} step${roundedSteps === 1 ? "" : "s"
+      } ${sideText}${trendText ? `, ${trendText}` : ""}.`;
   }
 
   speak(phrase);
@@ -1075,7 +1202,7 @@ function initSpeechRecognition() {
 
   recognition.onerror = (event) => {
     console.warn("Speech recognition error", event.error);
-    
+
     // If we're waiting for initial target and get an error, start detection without target
     if (waitingForInitialTarget) {
       if (event.error === "no-speech" || event.error === "audio-capture") {
@@ -1088,7 +1215,7 @@ function initSpeechRecognition() {
         return;
       }
     }
-    
+
     getStatusLabel().textContent =
       "Voice error: " + (event.error || "unknown error");
   };
@@ -1107,7 +1234,7 @@ function initSpeechRecognition() {
       btn.textContent = "🎤 Set Target by Voice";
       btn.disabled = false;
     }
-    
+
     // If we were waiting for initial target and didn't get a valid one, retry
     if (waitingForInitialTarget && !currentTarget) {
       setTimeout(() => {
@@ -1163,6 +1290,7 @@ async function toggleVoiceTargetListening() {
 }
 
 function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileRunning = false) {
+  if (CURRENCY_COMMAND_PHRASES.some((phrase) => transcript.includes(phrase))) return;
   // Basic normalization and mapping to model class names
   const norm = transcript
     .replace(/[^a-zA-Z ]/g, " ")
@@ -1179,7 +1307,7 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileR
     "all": "any",
     "everything": "any",
     "clear": "any",
-    
+
     // People & Animals
     "person": "person",
     "people": "person",
@@ -1194,7 +1322,7 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileR
     "horse": "horse",
     "cow": "cow",
     "sheep": "sheep",
-    
+
     // Vehicles
     "car": "car",
     "vehicle": "car",
@@ -1211,7 +1339,7 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileR
     "airplane": "airplane",
     "plane": "airplane",
     "aircraft": "airplane",
-    
+
     // Furniture
     "chair": "chair",
     "seat": "chair",
@@ -1221,7 +1349,7 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileR
     "dining table": "dining table",
     "table": "dining table",
     "bench": "bench",
-    
+
     // Electronics
     "phone": "cell phone",
     "mobile": "cell phone",
@@ -1237,7 +1365,7 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileR
     "mouse": "mouse",
     "clock": "clock",
     "watch": "clock",
-    
+
     // Kitchen Items
     "bottle": "bottle",
     "cup": "cup",
@@ -1252,7 +1380,7 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileR
     "refrigerator": "refrigerator",
     "fridge": "refrigerator",
     "sink": "sink",
-    
+
     // Food & Drinks
     "apple": "apple",
     "banana": "banana",
@@ -1265,7 +1393,7 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileR
     "doughnut": "donut",
     "wine glass": "wine glass",
     "wine": "wine glass",
-    
+
     // Personal Items
     "backpack": "backpack",
     "bag": "backpack",
@@ -1281,7 +1409,7 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileR
     "hair drier": "hair drier",
     "hair dryer": "hair drier",
     "hairdryer": "hair drier",
-    
+
     // Sports & Recreation
     "sports ball": "sports ball",
     "ball": "sports ball",
@@ -1298,7 +1426,7 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileR
     "snowboard": "snowboard",
     "kite": "kite",
     "frisbee": "frisbee",
-    
+
     // Other Objects
     "door": "door",
     "traffic light": "traffic light",
@@ -1320,7 +1448,7 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileR
   // Try to match the transcript
   let matched = "";
   const lowerNorm = norm.toLowerCase();
-  
+
   // First, try exact match
   if (voiceToClassMap[lowerNorm]) {
     matched = voiceToClassMap[lowerNorm];
@@ -1402,7 +1530,7 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileR
     const msg = "Target set to any. Detecting all objects.";
     getStatusLabel().textContent = msg;
     speak(msg);
-    
+
     // If this was the initial prompt, start detection now
     if (isInitialPrompt) {
       waitingForInitialTarget = false;
@@ -1434,7 +1562,7 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileR
   const msg = `Target set to ${matched}. Starting detection now.`;
   getStatusLabel().textContent = msg;
   speak(msg);
-  
+
   // If this was the initial prompt, start detection now
   if (isInitialPrompt) {
     waitingForInitialTarget = false;
@@ -1450,3 +1578,513 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileR
   }
 }
 
+// ================================
+// CURRENCY BUTTON - HOLD TO DETECT, TAP TO START GUIDANCE
+// ================================
+
+let currencyHoldTimer = null;
+let currencyHoldStartTime = 0;
+const CURRENCY_HOLD_DURATION_MS = 1500; // 1.5 seconds to trigger currency detection
+let currencyTapHandled = false;
+
+function initCurrencyButton() {
+  const currencyBtn = document.getElementById("currency-detect-btn");
+  if (!currencyBtn) return;
+
+  // Add progress bar element for hold indication
+  let progressBar = currencyBtn.querySelector(".hold-progress");
+  if (!progressBar) {
+    progressBar = document.createElement("div");
+    progressBar.className = "hold-progress";
+    currencyBtn.appendChild(progressBar);
+  }
+
+  // Touch events for mobile
+  currencyBtn.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    currencyTapHandled = false;
+    startCurrencyHold(currencyBtn, progressBar);
+  }, { passive: false });
+
+  currencyBtn.addEventListener("touchend", (e) => {
+    e.preventDefault();
+    endCurrencyHold(currencyBtn, progressBar);
+  });
+
+  currencyBtn.addEventListener("touchcancel", (e) => {
+    cancelCurrencyHold(currencyBtn, progressBar);
+  });
+
+  // Mouse events for desktop
+  currencyBtn.addEventListener("mousedown", (e) => {
+    currencyTapHandled = false;
+    startCurrencyHold(currencyBtn, progressBar);
+  });
+
+  currencyBtn.addEventListener("mouseup", (e) => {
+    endCurrencyHold(currencyBtn, progressBar);
+  });
+
+  currencyBtn.addEventListener("mouseleave", (e) => {
+    cancelCurrencyHold(currencyBtn, progressBar);
+  });
+}
+
+function startCurrencyHold(btn, progressBar) {
+  currencyHoldStartTime = Date.now();
+  btn.classList.add("pressing");
+
+  // Animate progress bar
+  progressBar.style.transition = `width ${CURRENCY_HOLD_DURATION_MS}ms linear`;
+  progressBar.style.width = "100%";
+
+  // Vibrate feedback if supported
+  if (navigator.vibrate) {
+    navigator.vibrate(50);
+  }
+
+  // Set timer for hold action (currency detection)
+  currencyHoldTimer = setTimeout(() => {
+    currencyTapHandled = true;
+    btn.classList.remove("pressing");
+    progressBar.style.transition = "width 0.2s ease";
+    progressBar.style.width = "0";
+
+    // Vibrate to confirm hold completed
+    if (navigator.vibrate) {
+      navigator.vibrate([100, 50, 100]);
+    }
+
+    // Trigger currency detection
+    triggerCurrencyDetection();
+  }, CURRENCY_HOLD_DURATION_MS);
+}
+
+function endCurrencyHold(btn, progressBar) {
+  const holdDuration = Date.now() - currencyHoldStartTime;
+
+  // Clear the hold timer
+  if (currencyHoldTimer) {
+    clearTimeout(currencyHoldTimer);
+    currencyHoldTimer = null;
+  }
+
+  // Reset UI
+  btn.classList.remove("pressing");
+  progressBar.style.transition = "width 0.2s ease";
+  progressBar.style.width = "0";
+
+  // If hold wasn't completed (it was a tap), start guidance mode
+  if (!currencyTapHandled && holdDuration < CURRENCY_HOLD_DURATION_MS) {
+    startGuidanceMode();
+  }
+}
+
+function cancelCurrencyHold(btn, progressBar) {
+  if (currencyHoldTimer) {
+    clearTimeout(currencyHoldTimer);
+    currencyHoldTimer = null;
+  }
+
+  btn.classList.remove("pressing");
+  progressBar.style.transition = "width 0.2s ease";
+  progressBar.style.width = "0";
+}
+
+function startGuidanceMode() {
+  // Start the main guidance/detection mode
+  if (!isRunning || !yoloSession) {
+    speak("Starting guidance mode.");
+    getStatusLabel().textContent = "Starting guidance...";
+    startApp().catch((err) => {
+      speak("Could not start guidance. Please try again.");
+      getStatusLabel().textContent = "Failed to start. Tap to retry.";
+    });
+  } else {
+    // Already running, ask for target
+    speak("Guidance is running. Double tap to change target.");
+    getStatusLabel().textContent = currentTarget
+      ? `Looking for ${currentTarget}...`
+      : "Detecting all objects...";
+  }
+}
+
+function triggerCurrencyDetection() {
+  // Ensure camera and model are ready
+  if (!isRunning || !yoloSession) {
+    speak("Starting camera for currency detection.");
+    getStatusLabel().textContent = "Starting camera...";
+    startApp().then(() => {
+      setTimeout(() => {
+        runCurrencyDetectionFromButton();
+      }, 1000);
+    }).catch((err) => {
+      speak("Camera failed. Please try again.");
+      getStatusLabel().textContent = "Camera error. Tap to retry.";
+    });
+    return;
+  }
+
+  runCurrencyDetectionFromButton();
+}
+
+async function runCurrencyDetectionFromButton() {
+  const btn = document.getElementById("currency-detect-btn");
+  if (btn) btn.classList.add("active");
+
+  guidanceState = GUIDANCE_STATE.CURRENCY_DETECTION;
+  getStatusLabel().textContent = "📸 Detecting currency...";
+  speak("Detecting currency. Please hold the note steady.");
+
+  try {
+    const result = await detectCurrencyWithModel();
+    if (guidanceState === GUIDANCE_STATE.STOPPED) return;
+
+    guidanceState = GUIDANCE_STATE.RUNNING;
+    getStatusLabel().textContent = result;
+    speak(result);
+  } catch (err) {
+    console.error("Currency detection error:", err);
+    if (guidanceState !== GUIDANCE_STATE.STOPPED) {
+      guidanceState = GUIDANCE_STATE.RUNNING;
+      const msg = "Currency detection failed. Please try again.";
+      getStatusLabel().textContent = msg;
+      speak(msg);
+    }
+  } finally {
+    if (btn) btn.classList.remove("active");
+  }
+}
+
+// Currency detection using ONNX model from models folder
+let currencySession = null;
+const CURRENCY_MODEL_URL = "models/currency_detector.onnx";
+const CURRENCY_INPUT_SIZE = 150; // Model expects 150x150 input
+
+async function loadCurrencyModel() {
+  if (currencySession) return currencySession;
+
+  if (!window.ort) {
+    throw new Error("ONNX Runtime Web not loaded.");
+  }
+
+  getStatusLabel().textContent = "Loading currency detection model...";
+
+  try {
+    currencySession = await ort.InferenceSession.create(CURRENCY_MODEL_URL, {
+      executionProviders: ["wasm"],
+    });
+    console.log("Currency detection model loaded successfully");
+    console.log("Model inputs:", currencySession.inputNames);
+    console.log("Model outputs:", currencySession.outputNames);
+    return currencySession;
+  } catch (err) {
+    console.error("Failed to load currency model:", err);
+    throw err;
+  }
+}
+
+async function detectCurrencyWithModel() {
+  if (!videoEl || videoEl.readyState < 2) {
+    return "Camera not ready. Please try again.";
+  }
+
+  const w = videoEl.videoWidth;
+  const h = videoEl.videoHeight;
+  if (!w || !h) return "Unable to capture image.";
+
+  try {
+    // Load the currency model if not already loaded
+    const session = await loadCurrencyModel();
+
+    // Create canvas for preprocessing
+    const canvas = document.createElement("canvas");
+    canvas.width = CURRENCY_INPUT_SIZE;
+    canvas.height = CURRENCY_INPUT_SIZE;
+    const captureCtx = canvas.getContext("2d");
+
+    // Draw and resize the video frame
+    captureCtx.drawImage(videoEl, 0, 0, CURRENCY_INPUT_SIZE, CURRENCY_INPUT_SIZE);
+    const imageData = captureCtx.getImageData(0, 0, CURRENCY_INPUT_SIZE, CURRENCY_INPUT_SIZE);
+    const { data } = imageData;
+
+    // Preprocess: Convert to HWC format (channels last), normalize to [0,1]
+    // Model expects shape [1, 150, 150, 3] (NHWC format)
+    const area = CURRENCY_INPUT_SIZE * CURRENCY_INPUT_SIZE;
+    const floatData = new Float32Array(area * 3);
+
+    for (let i = 0; i < area; i++) {
+      floatData[i * 3] = data[i * 4] / 255.0;       // R
+      floatData[i * 3 + 1] = data[i * 4 + 1] / 255.0; // G
+      floatData[i * 3 + 2] = data[i * 4 + 2] / 255.0; // B
+    }
+
+    // Create input tensor - shape [1, H, W, 3] (NHWC format)
+    const inputTensor = new ort.Tensor("float32", floatData, [1, CURRENCY_INPUT_SIZE, CURRENCY_INPUT_SIZE, 3]);
+
+    const inputName = session.inputNames[0];
+    const feeds = { [inputName]: inputTensor };
+
+    // Run inference
+    getStatusLabel().textContent = "Analyzing currency...";
+    const results = await session.run(feeds);
+
+    const outputName = session.outputNames[0];
+    const outputTensor = results[outputName];
+    const outputData = outputTensor.data;
+
+    // Class labels - adjust based on your model
+    const classLabels = [
+      "10 Rupees", "20 Rupees", "50 Rupees", "100 Rupees",
+      "200 Rupees", "500 Rupees", "2000 Rupees", "Not a currency"
+    ];
+
+    // Find highest probability class
+    let maxIdx = 0;
+    let maxProb = outputData[0];
+    for (let i = 1; i < outputData.length; i++) {
+      if (outputData[i] > maxProb) {
+        maxProb = outputData[i];
+        maxIdx = i;
+      }
+    }
+
+    const confidence = maxProb;
+    if (confidence < 0.5) {
+      return "Could not identify currency. Please hold the note closer.";
+    }
+
+    const detectedCurrency = classLabels[maxIdx] || `Class ${maxIdx}`;
+    return `Detected: ${detectedCurrency} (${Math.round(confidence * 100)}% confidence)`;
+
+  } catch (err) {
+    console.error("Currency detection error:", err);
+    if (err.message && err.message.includes("fetch")) {
+      return "Currency model not found. Check models folder.";
+    }
+    return `Error: ${err.message || "Unknown error"}`;
+  }
+}
+
+// ================================
+// EMERGENCY MODE
+// ================================
+
+let emergencyActive = false;
+let emergencyHoldTimer = null;
+let emergencyAlarmAudio = null;
+let emergencyHoldStartTime = 0;
+const EMERGENCY_HOLD_DURATION_MS = 2000; // 2 seconds to activate
+
+function initEmergencyButton() {
+  const emergencyBtn = document.getElementById("emergency-btn");
+  if (!emergencyBtn) return;
+
+  // Add progress bar element
+  const progressBar = document.createElement("div");
+  progressBar.className = "hold-progress";
+  emergencyBtn.appendChild(progressBar);
+
+  // Touch events for mobile
+  emergencyBtn.addEventListener("touchstart", (e) => {
+    e.preventDefault();
+    startEmergencyHold(emergencyBtn, progressBar);
+  }, { passive: false });
+
+  emergencyBtn.addEventListener("touchend", (e) => {
+    e.preventDefault();
+    cancelEmergencyHold(emergencyBtn, progressBar);
+  });
+
+  emergencyBtn.addEventListener("touchcancel", (e) => {
+    cancelEmergencyHold(emergencyBtn, progressBar);
+  });
+
+  // Mouse events for desktop
+  emergencyBtn.addEventListener("mousedown", (e) => {
+    startEmergencyHold(emergencyBtn, progressBar);
+  });
+
+  emergencyBtn.addEventListener("mouseup", (e) => {
+    cancelEmergencyHold(emergencyBtn, progressBar);
+  });
+
+  emergencyBtn.addEventListener("mouseleave", (e) => {
+    cancelEmergencyHold(emergencyBtn, progressBar);
+  });
+}
+
+function startEmergencyHold(btn, progressBar) {
+  if (emergencyActive) return;
+
+  emergencyHoldStartTime = Date.now();
+  btn.classList.add("pressing");
+
+  // Animate progress bar
+  progressBar.style.transition = `width ${EMERGENCY_HOLD_DURATION_MS}ms linear`;
+  progressBar.style.width = "100%";
+
+  // Vibrate if supported (pattern: hold vibration)
+  if (navigator.vibrate) {
+    navigator.vibrate(100);
+  }
+
+  emergencyHoldTimer = setTimeout(() => {
+    activateEmergency();
+  }, EMERGENCY_HOLD_DURATION_MS);
+}
+
+function cancelEmergencyHold(btn, progressBar) {
+  if (emergencyHoldTimer) {
+    clearTimeout(emergencyHoldTimer);
+    emergencyHoldTimer = null;
+  }
+
+  btn.classList.remove("pressing");
+  progressBar.style.transition = "width 0.2s ease";
+  progressBar.style.width = "0";
+}
+
+function activateEmergency() {
+  if (emergencyActive) return;
+  emergencyActive = true;
+
+  const overlay = document.getElementById("emergency-overlay");
+  if (overlay) {
+    overlay.setAttribute("aria-hidden", "false");
+  }
+
+  document.body.classList.add("emergency-active");
+
+  // Strong vibration pattern for emergency
+  if (navigator.vibrate) {
+    // SOS pattern: 3 short, 3 long, 3 short
+    navigator.vibrate([100, 50, 100, 50, 100, 200, 300, 100, 300, 100, 300, 200, 100, 50, 100, 50, 100]);
+  }
+
+  // Play alarm sound
+  playEmergencyAlarm();
+
+  // Speak emergency message
+  speak("Emergency alert activated! Help is on the way. Notifying your emergency contacts.");
+
+  // Get and display location
+  fetchEmergencyLocation();
+
+  // Simulate notifying contacts (in a real app, this would send SMS/push notifications)
+  console.log("🚨 EMERGENCY ACTIVATED - Would notify emergency contacts here");
+}
+
+function cancelEmergency() {
+  if (!emergencyActive) return;
+  emergencyActive = false;
+
+  const overlay = document.getElementById("emergency-overlay");
+  if (overlay) {
+    overlay.setAttribute("aria-hidden", "true");
+  }
+
+  document.body.classList.remove("emergency-active");
+
+  // Stop vibration
+  if (navigator.vibrate) {
+    navigator.vibrate(0);
+  }
+
+  // Stop alarm
+  stopEmergencyAlarm();
+
+  speak("Emergency cancelled.");
+  getStatusLabel().textContent = "Emergency cancelled.";
+
+  // Reset button state
+  const btn = document.getElementById("emergency-btn");
+  const progressBar = btn?.querySelector(".hold-progress");
+  if (btn && progressBar) {
+    btn.classList.remove("pressing");
+    progressBar.style.width = "0";
+  }
+}
+
+function playEmergencyAlarm() {
+  try {
+    // Create alarm using Web Audio API
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
+    function playAlarmLoop() {
+      if (!emergencyActive) return;
+
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      // Siren-like sound
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(1200, audioContext.currentTime + 0.5);
+      oscillator.frequency.exponentialRampToValueAtTime(800, audioContext.currentTime + 1);
+
+      gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 1);
+
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + 1);
+
+      // Loop the alarm
+      setTimeout(() => {
+        if (emergencyActive) playAlarmLoop();
+      }, 1100);
+    }
+
+    playAlarmLoop();
+    emergencyAlarmAudio = audioContext;
+
+  } catch (err) {
+    console.error("Could not play alarm:", err);
+  }
+}
+
+function stopEmergencyAlarm() {
+  if (emergencyAlarmAudio) {
+    try {
+      emergencyAlarmAudio.close();
+    } catch (e) {
+      // Ignore errors on close
+    }
+    emergencyAlarmAudio = null;
+  }
+}
+
+function fetchEmergencyLocation() {
+  const locationText = document.getElementById("emergency-location-text");
+  if (!locationText) return;
+
+  if (!navigator.geolocation) {
+    locationText.textContent = "Location unavailable";
+    return;
+  }
+
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const { latitude, longitude } = position.coords;
+      locationText.textContent = `Lat: ${latitude.toFixed(5)}, Lng: ${longitude.toFixed(5)}`;
+
+      // In a real app, you would:
+      // 1. Reverse geocode to get address
+      // 2. Send this location to emergency contacts
+      // 3. Possibly send to emergency services API
+      console.log("Emergency location:", { latitude, longitude });
+    },
+    (error) => {
+      console.error("Location error:", error);
+      locationText.textContent = "Could not fetch location";
+    },
+    {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0
+    }
+  );
+}
