@@ -149,6 +149,14 @@ let waitingForInitialTarget = false; // Flag to track if we're waiting for initi
 let detectionStarted = false; // Track if detection loop has started
 let startAppInFlight = null; // prevents double-start when buttons are tapped quickly
 
+// -------- Double-tap state machine --------
+const GUIDANCE_STATE = { STOPPED: "STOPPED", RUNNING: "RUNNING", ASK_TARGET: "ASK_TARGET" };
+let guidanceState = GUIDANCE_STATE.STOPPED;
+const DOUBLE_TAP_THRESHOLD_MS = 300;
+let lastTapTime = 0;
+let lastRunDoubleTapWasStop = false; // from RUNNING: next double-tap stops (false) or asks target (true)
+let askTargetMode = null; // null | "initial" | "while_running" (for ASK_TARGET cancel behavior)
+
 function getStatusLabel() {
   return document.getElementById("status-label");
 }
@@ -181,6 +189,7 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   initSpeechRecognition();
+  initDoubleTapHandler();
 
   // Don't auto-start - wait for user to click "Start Guidance" button
   // This ensures proper permissions and user intent
@@ -426,11 +435,13 @@ function askForTargetAutomatically() {
   }
   
   waitingForInitialTarget = true;
-  
+  guidanceState = GUIDANCE_STATE.ASK_TARGET;
+  askTargetMode = "initial";
+
   // Speak the prompt
   const prompt = "What object would you like me to find? Say the name of an object";
   speak(prompt);
-  
+
   // Wait for speech to finish, then start listening
   setTimeout(() => {
     try {
@@ -449,15 +460,94 @@ function askForTargetAutomatically() {
   }, 3500); // Wait 3.5 seconds for speech to finish
 }
 
+// Ask for a new target while guidance is already running (camera + detection active).
+function askForTargetWhileRunning() {
+  if (!recognition) {
+    speak("Voice target not available. Use the dropdown to change target.");
+    return;
+  }
+  guidanceState = GUIDANCE_STATE.ASK_TARGET;
+  askTargetMode = "while_running";
+  const prompt = "Say the new target object, or say any for all objects.";
+  speak(prompt);
+  getStatusLabel().textContent = "🎤 Listening for new target…";
+  setTimeout(() => {
+    try {
+      recognition.start();
+    } catch (e) {
+      console.warn("Recognition start failed", e);
+      guidanceState = GUIDANCE_STATE.RUNNING;
+      askTargetMode = null;
+    }
+  }, 2500);
+}
+
+// Double-tap gesture: STOPPED → start; RUNNING → stop or ask target; ASK_TARGET → cancel/stop.
+function handleDoubleTap() {
+  const now = Date.now();
+  if (now - lastTapTime > DOUBLE_TAP_THRESHOLD_MS) return;
+  lastTapTime = 0;
+
+  switch (guidanceState) {
+    case GUIDANCE_STATE.STOPPED:
+      startApp().catch(() => {
+        getStatusLabel().textContent = "Tap Start Guidance to allow camera.";
+      });
+      break;
+
+    case GUIDANCE_STATE.RUNNING:
+      if (lastRunDoubleTapWasStop) {
+        lastRunDoubleTapWasStop = false;
+        askForTargetWhileRunning();
+      } else {
+        lastRunDoubleTapWasStop = true;
+        stopDetection();
+      }
+      break;
+
+    case GUIDANCE_STATE.ASK_TARGET:
+      if (askTargetMode === "while_running") {
+        if (recognition && isListeningForTarget) recognition.stop();
+        guidanceState = GUIDANCE_STATE.RUNNING;
+        askTargetMode = null;
+        getStatusLabel().textContent = currentTarget
+          ? `Guidance running. Looking for ${currentTarget}…`
+          : "Guidance running. Detecting all objects…";
+        speak("Resuming guidance.");
+      } else {
+        if (recognition && isListeningForTarget) recognition.stop();
+        waitingForInitialTarget = false;
+        stopDetection();
+        askTargetMode = null;
+        lastRunDoubleTapWasStop = false;
+      }
+      break;
+  }
+}
+
+function initDoubleTapHandler() {
+  const container = document.querySelector(".detect-page") || document.body;
+  if (!container) return;
+  container.addEventListener("click", (e) => {
+    const now = Date.now();
+    if (now - lastTapTime <= DOUBLE_TAP_THRESHOLD_MS) {
+      handleDoubleTap();
+    } else {
+      lastTapTime = now;
+    }
+  });
+}
+
 // Start the detection loop
 function startDetection() {
   if (detectionStarted) return;
   detectionStarted = true;
-  
-  getStatusLabel().textContent = currentTarget 
+  guidanceState = GUIDANCE_STATE.RUNNING;
+
+  getStatusLabel().textContent = currentTarget
     ? `Guidance running. Looking for ${currentTarget}…`
     : "Guidance running. Detecting all objects…";
-  
+
   const startBtn = document.getElementById("start-btn");
   if (startBtn) {
     startBtn.textContent = "Running";
@@ -909,6 +999,7 @@ function handleVoiceGuidance(predictions) {
 function stopDetection() {
   isRunning = false;
   detectionStarted = false;
+  guidanceState = GUIDANCE_STATE.STOPPED;
   const startBtn = document.getElementById("start-btn");
   if (startBtn) {
     startBtn.textContent = "Start Guidance";
@@ -1005,7 +1096,8 @@ function initSpeechRecognition() {
   recognition.onresult = (event) => {
     if (!event.results || !event.results[0]) return;
     const transcript = event.results[0][0].transcript.toLowerCase().trim();
-    handleTargetFromSpeech(transcript, waitingForInitialTarget);
+    const isAskWhileRunning = guidanceState === GUIDANCE_STATE.ASK_TARGET && askTargetMode === "while_running";
+    handleTargetFromSpeech(transcript, waitingForInitialTarget, isAskWhileRunning);
   };
 
   recognition.onend = () => {
@@ -1070,7 +1162,7 @@ async function toggleVoiceTargetListening() {
   }
 }
 
-function handleTargetFromSpeech(transcript, isInitialPrompt = false) {
+function handleTargetFromSpeech(transcript, isInitialPrompt = false, isAskWhileRunning = false) {
   // Basic normalization and mapping to model class names
   const norm = transcript
     .replace(/[^a-zA-Z ]/g, " ")
@@ -1259,17 +1351,48 @@ function handleTargetFromSpeech(transcript, isInitialPrompt = false) {
   }
 
   if (!matched) {
+    if (isAskWhileRunning) {
+      getStatusLabel().textContent = "Did not recognize. Say person, chair, bottle, or any.";
+      speak("Did not recognize. Try again.");
+      return;
+    }
     getStatusLabel().textContent =
       'Did not recognize a target. Try saying "person", "chair", "bottle", "car", "phone", or "any".';
-    
     if (isInitialPrompt) {
-      // If this is the initial prompt, we'll retry automatically (handled in onend)
-      speak("I did not catch a valid target. Please try again.");
-      return;
-    } else {
       speak("I did not catch a valid target. Please try again.");
       return;
     }
+    speak("I did not catch a valid target. Please try again.");
+    return;
+  }
+
+  // Ask-while-running: only update target and state; detection already running.
+  if (isAskWhileRunning) {
+    if (matched === "any") {
+      currentTarget = "";
+      const sel = document.getElementById("target-select");
+      if (sel) sel.value = "";
+      speak("Target set to any. Detecting all objects.");
+    } else {
+      currentTarget = matched;
+      const sel = document.getElementById("target-select");
+      if (sel) {
+        for (let i = 0; i < sel.options.length; i++) {
+          if (sel.options[i].value === matched) {
+            sel.selectedIndex = i;
+            break;
+          }
+        }
+      }
+      speak(`Target set to ${matched}.`);
+    }
+    getStatusLabel().textContent = currentTarget
+      ? `Guidance running. Looking for ${currentTarget}…`
+      : "Guidance running. Detecting all objects…";
+    guidanceState = GUIDANCE_STATE.RUNNING;
+    lastRunDoubleTapWasStop = false;
+    askTargetMode = null;
+    return;
   }
 
   if (matched === "any") {
